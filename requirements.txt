@@ -1,4 +1,4 @@
 tensorboard
 pyyaml
 easydict
-scipy
+# scipy
