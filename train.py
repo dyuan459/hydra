@@ -18,6 +18,7 @@ from torch.utils.data.dataset import Dataset
 from torchvision import datasets, transforms
 from torch.utils.tensorboard import SummaryWriter
 
+from YOLOv3 import load_model  # Custom import for YOLOv3 model loading
 import models
 import data
 from args import parse_args
@@ -105,23 +106,35 @@ def main():
     device = torch.device(f"cuda:{gpu_list[0]}" if use_cuda else "cpu")
 
     # Create model
-    cl, ll = get_layers(args.layer_type)
-    if len(gpu_list) > 1:
-        print("Using multiple GPUs")
-        model = nn.DataParallel(
-            models.__dict__[args.arch](
-                cl, ll, args.init_type, num_classes=args.num_classes
-            ),
-            gpu_list,
-        ).to(device)
-    else:
-        model = models.__dict__[args.arch](
-            cl, ll, args.init_type, num_classes=args.num_classes
-        ).to(device)
+    # cl, ll = get_layers(args.layer_type) # simply gets the proper layers which is accounted for now
+    # if len(gpu_list) > 1:
+    #     print("Using multiple GPUs")
+    #     model = nn.DataParallel(
+    #         models.__dict__[args.arch](
+    #             cl, ll, args.init_type, num_classes=args.num_classes
+    #         ),
+    #         gpu_list,
+    #     ).to(device)
+    # else:
+    #     model = models.__dict__[args.arch](
+    #         cl, ll, args.init_type, num_classes=args.num_classes
+    #     ).to(device)
+    model = load_model("yolov3.cfg","yolov3_ckpt_best.pth", args.layer_type)  # Custom model loading for YOLOv3
     logger.info(model)
+
+    # YOLOv3 is typically trained on COCO (object detection). If you want to
+    # use a COCO-trained YOLOv3 checkpoint here, you will likely need to:
+    # 3) YOLOv3 has multi-scale heads, anchor priors, and detection-specific
+    #    buffers; pruning detection heads may need per-layer considerations.
+    #    This is the main place to edit model creation when using YOLOv3.
 
     # Customize models for training/pruning/fine-tuning
     prepare_model(model, args)
+    # YOLOv3 models often carry COCO-specific anchors and buffers (e.g., grid
+    # cell shapes, anchor priors). `prepare_model` must not accidentally
+    # freeze/unfreeze these non-parameter buffers. If detection heads have
+    # per-anchor scalars or other non-Parameter attributes, update
+    # `prepare_model` in `utils/model.py` to treat them appropriately.
 
     # Setup tensorboard writer
     writer = SummaryWriter(os.path.join(result_sub_dir, "tensorboard"))
@@ -131,6 +144,15 @@ def main():
     train_loader, test_loader = D.data_loaders()
 
     logger.info(args.dataset, D, len(train_loader.dataset), len(test_loader.dataset))
+
+    # COCO is an object-detection dataset. Its dataloader returns images and
+    # lists/dicts of detection targets (boxes, labels, areas, iscrowd, etc.).
+    # The HYDRA repo's CIFAR/SVHN loaders are classification-focused and
+    # return (images, class_labels). For COCO/YOLOv3 you must replace the
+    # dataloader with a COCO-compatible loader that yields targets in the
+    # format expected by your YOLOv3 implementation (typically a list of
+    # dicts or tensors per image). Also adapt training loss (trainer) to use
+    # YOLO detection loss rather than CrossEntropy/TRADES.
 
     # Semi-sup dataloader
     if args.is_semisup:
@@ -159,10 +181,25 @@ def main():
         else:
             logger.info("=> no checkpoint found at '{}'".format(args.resume))
 
+    # COCO-trained YOLOv3 checkpoints may come from different repos and use
+    # different key names. Typical steps:
+    # - Load with `strict=False` and implement a key-mapper if names differ.
+    # - If checkpoint is dense (plain Conv2d) but you want `subnet` layers,
+    #   convert dense->subnet or swap modules in-place and initialize
+    #   `popup_scores` before pruning.
+    # - COCO checkpoints may also store extra metadata (category mapping,
+    #   anchors). Strip or preserve that metadata as needed for your load.
+
     # Init scores once source net is loaded.
     # NOTE: scaled_init_scores will overwrite the scores in the pre-trained net.
     if args.scaled_score_init:
         initialize_scaled_score(model)
+
+    # `--scaled-score-init` overwrites `popup_scores` from weight magnitudes.
+    # For COCO-trained YOLOv3 you may prefer to initialize only backbone
+    # layers' scores from weight magnitudes and leave detection heads
+    # (anchors, output convolutions) with a targeted init to avoid hurting
+    # detection quality.
 
     # Scaled random initialization. Useful when training a high sparse net from scratch.
     # If not used, a sparse net (without batch-norm) from scratch will not coverge.
@@ -178,6 +215,12 @@ def main():
 
     if args.snip_init:
         snip_init(model, criterion, optimizer, train_loader, device, args)
+
+    # SNIP initialization currently uses a classification `criterion` to
+    # compute sensitivity gradients. For COCO/YOLOv3, `snip_init` should be
+    # called with the YOLO detection loss and a representative detection
+    # minibatch (images + bounding-box targets) so that `popup_scores` are
+    # set according to detection sensitivity.
 
     assert not (args.source_net and args.resume), (
         "Incorrect setup: "
@@ -261,6 +304,13 @@ def main():
             result_dir=os.path.join(result_sub_dir, "checkpoint"),
             save_dense=args.save_dense,
         )
+
+    # When `save_dense=True`, HYDRA writes `checkpoint_dense.pth.tar` with
+    # pruned weights zeroed. If you plan to load that file back into a
+    # standard YOLOv3 inference implementation (trained on COCO), ensure
+    # key names and tensor shapes match and remove any `popup_scores` keys
+    # or transform names via a mapper. Also confirm that anchor buffers and
+    # category mappings expected by COCO are present or re-attached.
 
         logger.info(
             f"Epoch {epoch}, val-method {args.val_method}, validation accuracy {prec1}, best_prec {best_prec1}"

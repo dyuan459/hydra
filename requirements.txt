@@ -1,4 +1,5 @@
 tensorboard
 pyyaml
 easydict
+pytorch
 # scipy
