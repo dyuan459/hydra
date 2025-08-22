@@ -8,6 +8,9 @@ from utils.logging import AverageMeter, ProgressMeter
 from utils.eval import accuracy
 from utils.adv import trades_loss
 
+from lossSingle import compute_loss
+from PGDsingle import PGD
+
 # TODO: add adversarial accuracy.
 def train(
     model, device, train_loader, sm_loader, criterion, optimizer, epoch, args, writer
@@ -30,6 +33,8 @@ def train(
     model.train()
     end = time.time()
 
+    attacker = PGD(model, device, epsilon=args.epsilon, lr=0.01)
+
     dataloader = train_loader if sm_loader is None else zip(train_loader, sm_loader)
 
     for i, data in enumerate(dataloader):
@@ -39,13 +44,13 @@ def train(
                 torch.cat([d[1] for d in data], 0).to(device),
             )
         else:
-            images, target = data[0].to(device), data[1].to(device)
+            images, target = data[0].to(device), data[1]
 
         # basic properties of training data
         if i == 0:
             print(
                 images.shape,
-                target.shape,
+                len(target),
                 f"Batch_size from args: {args.batch_size}",
                 "lr: {:.5f}".format(optimizer.param_groups[0]["lr"]),
             )
@@ -54,20 +59,25 @@ def train(
         output = model(images)
 
         # calculate robust loss
-        loss = trades_loss(
-            model=model,
-            x_natural=images,
-            y=target,
-            device=device,
-            optimizer=optimizer,
-            step_size=args.step_size,
-            epsilon=args.epsilon,
-            perturb_steps=args.num_steps,
-            beta=args.beta,
-            clip_min=args.clip_min,
-            clip_max=args.clip_max,
-            distance=args.distance,
-        )
+        # loss = trades_loss(
+        #     model=model,
+        #     x_natural=images,
+        #     y=target,
+        #     device=device,
+        #     optimizer=optimizer,
+        #     step_size=args.step_size,
+        #     epsilon=args.epsilon,
+        #     perturb_steps=args.num_steps,
+        #     beta=args.beta,
+        #     clip_min=args.clip_min,
+        #     clip_max=args.clip_max,
+        #     distance=args.distance,
+        # )
+        output_adv = attacker(images, target)
+        
+        lossBefore = compute_loss(output, target, model)
+        lossAfter = compute_loss(output_adv, target, model)
+        loss = 0.5*lossBefore + 0.5*lossAfter
 
         # measure accuracy and record loss
         acc1, acc5 = accuracy(output, target, topk=(1, 5))

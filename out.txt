@@ -1,0 +1,13 @@
+=> Reading YAML config from configs.yml
+#################### Pruning network ####################
+===>>  gradient for weights: None  | training importance scores only
+Initialization relevance score with None initialization
+loading annotations into memory...
+Done (t=0.00s)
+creating index...
+index created!
+loading annotations into memory...
+Done (t=0.37s)
+creating index...
+index created!
+Initialization relevance score proportional to weight magnitudes (OVERWRITING SOURCE NET SCORES)

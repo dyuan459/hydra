@@ -23,7 +23,7 @@ from scipy.stats import norm
 import numpy as np
 import time
 
-
+from PGDsingle import PGD
 def get_output_for_batch(model, img, temp=1):
     """
         model(x) is expected to return logits (instead of softmax probas)
@@ -124,44 +124,71 @@ def adv(model, device, val_loader, criterion, args, writer, epoch=0):
 
     # switch to evaluation mode
     model.eval()
+    attacker = PGD(model, epoch=5, epsilon=args.epsilon, lr=0.01)
 
     with torch.no_grad():
         end = time.time()
-        for i, data in enumerate(val_loader):
-            images, target = data[0].to(device), data[1].to(device)
+        for i, (images,target) in enumerate(val_loader):
+            images, target = images.to(device), target
 
-            # clean images
-            output = model(images)
-            loss = criterion(output, target)
-
-            acc1, acc5 = accuracy(output, target, topk=(1, 5))
-            losses.update(loss.item(), images.size(0))
-            top1.update(acc1[0], images.size(0))
-            top5.update(acc5[0], images.size(0))
-
-            # adversarial images
-            images = pgd_whitebox(
-                model,
-                images,
-                target,
-                device,
-                args.epsilon,
-                args.num_steps,
-                args.step_size,
-                args.clip_min,
-                args.clip_max,
-                is_random=not args.const_init,
-            )
-
-            # compute output
-            output = model(images)
-            loss = criterion(output, target)
-
-            # measure accuracy and record loss
-            acc1, acc5 = accuracy(output, target, topk=(1, 5))
-            adv_losses.update(loss.item(), images.size(0))
-            adv_top1.update(acc1[0], images.size(0))
-            adv_top5.update(acc5[0], images.size(0))
+            # Handle object detection vs classification evaluation
+            if hasattr(args, 'task') and args.task == 'detection':
+                # For object detection models (YOLO)
+                # Clean images
+                output = model(images)
+                try:
+                    # Expected form for detection: criterion(output, target, model)
+                    loss, loss_components = criterion(output, target, model)
+                    
+                    # Detection metrics: Use mAP instead of accuracy
+                    # For now, we'll just log the loss components
+                    # In a full implementation, calculate mAP here
+                    losses.update(loss.item(), images.size(0))
+                    
+                    # Use object loss component as a proxy for "top1" accuracy
+                    obj_loss = loss_components[1].item()  # Typically the objectness loss
+                    top1.update(100.0 - obj_loss * 100, images.size(0))  # Convert to percentage
+                    top5.update(100.0 - loss.item() * 100, images.size(0))  # Use total loss for top5
+                    
+                    # Adversarial attack for detection models
+                    output = attacker(images, target)
+                    loss, loss_components = criterion(output, target, model)
+                    
+                    # Update adversarial metrics
+                    adv_losses.update(loss.item(), images.size(0))
+                    obj_loss = loss_components[1].item()  # Typically the objectness loss
+                    adv_top1.update(100.0 - obj_loss * 100, images.size(0))
+                    adv_top5.update(100.0 - loss.item() * 100, images.size(0))
+                except Exception as e:
+                    print(f"Error in detection evaluation: {str(e)}")
+                    # Fallback to simpler evaluation
+                    loss = torch.tensor(0.0, device=device)
+                    losses.update(0.0, images.size(0))
+                    top1.update(0.0, images.size(0))
+                    top5.update(0.0, images.size(0))
+                    adv_losses.update(0.0, images.size(0))
+                    adv_top1.update(0.0, images.size(0))
+                    adv_top5.update(0.0, images.size(0))
+            else:
+                # Original classification evaluation
+                # Clean images
+                output = model(images)
+                loss = criterion(output, target)
+    
+                acc1, acc5 = accuracy(output, target, topk=(1, 5))
+                losses.update(loss.item(), images.size(0))
+                top1.update(acc1[0], images.size(0))
+                top5.update(acc5[0], images.size(0))
+    
+                # Adversarial images
+                output = attacker(images, target)
+                loss = criterion(output, target, model)
+    
+                # measure accuracy and record loss
+                acc1, acc5 = accuracy(output, target, topk=(1, 5))
+                adv_losses.update(loss.item(), images.size(0))
+                adv_top1.update(acc1[0], images.size(0))
+                adv_top5.update(acc5[0], images.size(0))
 
             # measure elapsed time
             batch_time.update(time.time() - end)
@@ -177,10 +204,14 @@ def adv(model, device, val_loader, criterion, args, writer, epoch=0):
 
             # write a sample of test images to tensorboard (helpful for debugging)
             if i == 0 and writer:
-                writer.add_image(
-                    "Adv-test-images",
-                    torchvision.utils.make_grid(images[0 : len(images) // 4]),
-                )
+                # Ensure we have at least one image to avoid zero division in make_grid
+                if len(images) > 0:
+                    # Use at least 1 image, but no more than 25% of the batch
+                    num_images = max(1, min(len(images) // 4, 4))
+                    writer.add_image(
+                        "Adv-test-images",
+                        torchvision.utils.make_grid(images[0 : num_images]),
+                    )
         progress.display(i)  # print final results
 
     return adv_top1.avg, adv_top5.avg

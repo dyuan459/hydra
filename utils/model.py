@@ -55,27 +55,30 @@ def show_gradients(model):
 
 
 def snip_init(model, criterion, optimizer, train_loader, device, args):
-    print("Using SNIP initialization")
-    assert args.exp_mode == "pretrain"
+    print("Using SNIP initialization for detection")
     optimizer.zero_grad()
-    # init the score with kaiming normal init
+    # init scores with kaiming normal
     for m in model.modules():
         if hasattr(m, "popup_scores"):
-            nn.init.kaiming_normal_(m.popup_scores, mode="fan_in")
-
-    set_prune_rate_model(model, 1.0)
+            nn.init.kaiming_normal_(m.popup_scores)
+    
+    set_prune_rate_model(model, 1.0)  # Keep all connections for gradient computation
     unfreeze_vars(model, "popup_scores")
-
-    # take a forward pass and get gradients
-    for _, data in enumerate(train_loader):
-        images, target = data[0].to(device), data[1].to(device)
-
-        output = model(images)
-        loss = criterion(output, target)
-
-        loss.backward()
-        break
-
+    
+    # Get one batch with detection format
+    images, targets = next(iter(train_loader))
+    images = images.to(device)
+    
+    # YOLOv3 forward in training mode returns yolo_outputs list
+    outputs = model(images)  
+    
+    # Compute detection loss (handles both train/eval modes)
+    try:
+        loss, _ = criterion(outputs, targets, model)
+    except TypeError:
+        loss = criterion(outputs, targets)
+        
+    loss.backward()
     # update scores with their respective connection sensitivty
     for m in model.modules():
         if hasattr(m, "popup_scores"):
