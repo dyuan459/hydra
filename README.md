@@ -4,13 +4,12 @@ Use the Efficient Object Detection (EOD) project as pre-training and ignore step
 ## Pruning
 Testing was done so far with the instructions for pruning as is and with a checkpoint from Yolov3.
 1. Print statements are a bit deceptive, for example current loss is the original EOD loss and clean vs adversarial loss weight are 1:1
-2. Extensive testing has not been done yet but it works on the surface. Deeper testing recommended to verify pruning is done properly.
+2. Extensive testing has not been done yet but there is an issue with out of bounds I can't seem to trace at the moment. Deeper testing recommended to verify pruning is done properly.
 3. Printing is a bit spammy as it includes weights as well.
 4. Only unstructured pruning.
 5. snip_init is where importance scores seem to be done so implementing DeepLIFT is likely to be done here.
 6. Just realized that the venv I was using to test this was from the EOD project, the current requirements.txt may not work properly.
 7. Remember to module load opencv here.
-8. 
 
 ## the other steps
 Not done.

@@ -146,7 +146,12 @@ def adv(model, device, val_loader, criterion, args, writer, epoch=0):
                     losses.update(loss.item(), images.size(0))
                     
                     # Use object loss component as a proxy for "top1" accuracy
-                    obj_loss = loss_components[1].item()  # Typically the objectness loss
+                    # Check the size of loss_components to avoid index errors
+                    if len(loss_components) > 1:
+                        obj_loss = loss_components[1].item()  # Typically the objectness loss
+                    else:
+                        # Use the first component if only one exists
+                        obj_loss = loss_components[0].item() if len(loss_components) > 0 else loss.item()
                     top1.update(100.0 - obj_loss * 100, images.size(0))  # Convert to percentage
                     top5.update(100.0 - loss.item() * 100, images.size(0))  # Use total loss for top5
                     
@@ -156,7 +161,12 @@ def adv(model, device, val_loader, criterion, args, writer, epoch=0):
                     
                     # Update adversarial metrics
                     adv_losses.update(loss.item(), images.size(0))
-                    obj_loss = loss_components[1].item()  # Typically the objectness loss
+                    # Check the size of loss_components to avoid index errors
+                    if len(loss_components) > 1:
+                        obj_loss = loss_components[1].item()  # Typically the objectness loss
+                    else:
+                        # Use the first component if only one exists
+                        obj_loss = loss_components[0].item() if len(loss_components) > 0 else loss.item()
                     adv_top1.update(100.0 - obj_loss * 100, images.size(0))
                     adv_top5.update(100.0 - loss.item() * 100, images.size(0))
                 except Exception as e:
